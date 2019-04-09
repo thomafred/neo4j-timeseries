@@ -1,33 +1,89 @@
 
-from .device_config_node import DeviceConfigNode
-
 from neomodel import *
 from datetime import datetime
 
+from .device_config_node import DeviceConfigNode
+
 
 class TimeSeriesRel(StructuredRel):
+    """Time series edge-node
+
+    Holds the boundary condition for the swinging-door algorithm
+    """
 
     __label__ = 'NEXT'
 
     vmin = FloatProperty()
+    """FloatProperty: Lower boundary
+    """
+
     vmax = FloatProperty()
+    """FloatProperty: Upper boundary
+    """
 
 
 class TimeSeriesNode(StructuredNode):
+    """Generic Time-Series node
+
+    Interface class for a time-series. Subclasses ANode, BNode and VNode are considered private,
+    and thus not exposed to the user.
+    """
 
     __abstract_node__ = True
     __label__ = 'TimeSeriesNode'
 
     uuid = UniqueIdProperty()
+    """UniqueIdProperty: TimeSeriesNode ID
+    
+    Mostly used with internal functions
+    """
+
     timestamp = DateTimeProperty(required=True)
+    """DateTimeProperty: Time of sample
+    
+    Hold the timestamp of the sample contained in the node. Crucial when reading back data.
+    """
+
     devid = IntegerProperty(required=True)
+    """IntegerProperty: Device ID
+    
+    ID of device which is sourcing the time-series
+    """
+
     value = FloatProperty()
+    """FloatProperty: Value of sample
+    
+    Node sample value
+    """
 
     device = RelationshipFrom('neo4j_timeseries.DeviceConfigNode', 'EVENT', cardinality=One)
+    """Relationship: Edge to source device
+    """
+
     next = RelationshipTo('TimeSeriesNode', 'NEXT', model=TimeSeriesRel, cardinality=ZeroOrOne)
+    """RelationShip: Edge to next TimeSeriesNode
+    
+    This edge will lead to the next sample. If there is no edge, then the sample is the last sample in the series.
+    """
 
     @classmethod
     def append(cls, devid, value, timestamp=datetime.now()):
+        """Append sample to the time-series
+
+        This function acts as an object-factory, doing all the database-housekeeping related to appending
+        a new node the time-series of a device.
+
+        The returned node will be an instance of ANode, BNode or VNode, depending on context, however each instance
+        will have the same properties.
+
+        Args:
+            devid: Source device ID, can be instance of AbstractDeviceConfigNode or and int
+            value (float): Sample value
+            timestamp (datetime): Sample timestamp
+
+        Returns:
+            New TimeSeriesNode
+        """
 
         if isinstance(devid, DeviceConfigNode):
             devid = devid.devid
@@ -44,6 +100,8 @@ class TimeSeriesNode(StructuredNode):
         res, _ = obj.cypher(query)
 
         if res:
+
+            # ANode was found
 
             assert len(res) == 1
             res = res[0]
@@ -64,17 +122,28 @@ class TimeSeriesNode(StructuredNode):
 
             if res:
 
+                # BNode was found
+
                 assert len(res) == 1
                 res = res[0]
 
                 edge = TimeSeriesRel.inflate(res[0])
                 b_node = BNode.inflate(res[1])
 
+                # Update the bounds
+
                 vmin = max(edge.vmin, b_node.value - device.sensor_deviation)
                 vmax = min(edge.vmax, b_node.value + device.sensor_deviation)
 
+                # Check sample bounds
+
                 if vmin < obj.value < vmax:
-                    # Within bounds
+
+                    # Sample is within bounds
+                    #   Delete BNode and relabel NewNode to BNode
+                    #   Connect BNode (previously NewNode) to ANode using new bounds
+                    #   Also Connect BNode (previously NewNode) to DeviceConfigNode
+
                     query = """
                         match (m)-[:NEXT]->(n) where id(m)={a_node} and id(n)={b_node}
                         with m, n
@@ -103,8 +172,15 @@ class TimeSeriesNode(StructuredNode):
                     res = res[0]
 
                     obj = BNode.inflate(res[0])
+
                 else:
-                    # Out of bounds
+
+                    # Sample is out of bounds
+                    #   Relabel ANode and BNode to VNodes.
+                    #   Relabel NewNode to ANode and create an edge from the last
+                    #   VNode (previously BNode) to ANode (previously NewNode)
+                    #   Also Connect ANode (previously NewNode) to DeviceConfigNode
+
                     query = """
                         match (m)-[:NEXT]->(n) where id(m)={a_node} and id(n)={b_node}
                         with m, n
@@ -139,7 +215,9 @@ class TimeSeriesNode(StructuredNode):
 
             else:
 
-                # Relabel and create edge
+                # BNode was not found
+                #  Relabel NewNode to BNode and create edge to ANode
+                #  Also connect BNode (previously NewNode) to DeviceConfigNode
 
                 query = """
                     match (n:NewNode) where id(n)={{self}}
@@ -169,7 +247,8 @@ class TimeSeriesNode(StructuredNode):
 
         else:
 
-            # Relabel and connect device node
+            # ANode was not found
+            #   Relabel NewNode to Anode and connect DeviceConfigNode
 
             query = """
                 match (n:NewNode) where id(n)={{self}}
@@ -190,16 +269,43 @@ class TimeSeriesNode(StructuredNode):
 
 
 class NewNode(TimeSeriesNode):
+    """New time-series node
+
+    Only exists briefly, and is converted to either ANode or BNode.
+    Should not exist outside of a database transaction
+    """
     __label__ = 'NewNode'
 
 
 class ANode(TimeSeriesNode):
+    """Swinging door starting node
+
+    Used by the swinging-door algorithm as a starting point.
+
+    Each time-series can only have a single ANode.
+    Will be converted to VNode once the swinging-door algorithm concludes
+    """
     __label__ = 'ANode'
 
 
 class BNode(TimeSeriesNode):
+    """Swinging door intermediate node
+
+    Used by the swinging-door algorithm as an intermediate point.
+    Holds the last active value of the time-series, and is used to update the bounds
+    of the algorithm.
+
+    Each time-series can only have a single BNode.
+    Will be converted to VNode once the swinging-door algorithm concludes
+    """
     __label__ = 'BNode'
 
 
 class VNode(TimeSeriesNode):
+    """Swinging-door Compressed node
+
+    Former ANode or BNode, holding a single value of a compressed series of samples.
+    The number of samples is non-constant, and depends on the device config sensor devation
+    and  the variance of the input data.
+    """
     __label__ = 'VNode'

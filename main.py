@@ -8,10 +8,12 @@ if __name__ == '__main__':
 
     import math
 
-    test_data = [2 * math.sin(2 * math.pi * x / 100.) for x in range(100)]
+    test_data = [1 * math.sin(2 * math.pi * x / 100.) for x in range(100)]
     print(test_data)
 
     db.set_connection('bolt://neo4j:ttt@127.0.0.1:7687')
+
+    n = None
 
     with db.transaction:
         try:
