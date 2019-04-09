@@ -1,6 +1,6 @@
 
 from neomodel import *
-from datetime import datetime
+from datetime import datetime, timezone
 
 from .device_config_node import DeviceConfigNode
 
@@ -91,6 +91,11 @@ class TimeSeriesNode(StructuredNode):
         if isinstance(devid, DeviceConfigNode):
             devid = devid.devid
 
+        if timestamp.tzinfo is None:
+
+            # Convert to UTC
+            timestamp = timestamp.astimezone(timezone.utc)
+
         obj = NewNode(devid=devid, value=value, timestamp=timestamp).save()
 
         # Find ANode
@@ -135,12 +140,25 @@ class TimeSeriesNode(StructuredNode):
 
                 # Update the bounds
 
-                vmin = max(edge.vmin, b_node.value - device.sensor_deviation)
-                vmax = min(edge.vmax, b_node.value + device.sensor_deviation)
+                ta = a_node.timestamp.timestamp()
+                tb = b_node.timestamp.timestamp()
+                tn = obj.timestamp.timestamp()
+
+                assert tn > tb > ta
+
+                vmin = (b_node.value - device.sensor_deviation - a_node.value) / (tb - ta)
+                vmax = (b_node.value + device.sensor_deviation - a_node.value) / (tb - ta)
+
+                vmin = max(vmin, edge.vmin)
+                vmax = min(vmax, edge.vmax)
+
+                assert vmin < vmax
+
+                vnew = (obj.value - a_node.value) / (tn - ta)
 
                 # Check sample bounds
 
-                if vmin < obj.value < vmax:
+                if vmin < vnew < vmax:
 
                     # Sample is within bounds
                     #   Delete BNode and relabel NewNode to BNode
@@ -222,6 +240,8 @@ class TimeSeriesNode(StructuredNode):
                 #  Relabel NewNode to BNode and create edge to ANode
                 #  Also connect BNode (previously NewNode) to DeviceConfigNode
 
+                ta, tn = a_node.timestamp.timestamp(), obj.timestamp.timestamp()
+
                 query = """
                     match (n:NewNode) where id(n)={{self}}
                     with n
@@ -237,8 +257,8 @@ class TimeSeriesNode(StructuredNode):
                     return m, k, n
                 """.format(
                     other=a_node.id,
-                    vmin=a_node.value - device.sensor_deviation,
-                    vmax=a_node.value + device.sensor_deviation
+                    vmin=(obj.value - device.sensor_deviation - a_node.value) / (tn - ta),
+                    vmax=(obj.value + device.sensor_deviation - a_node.value) / (tn - ta),
                 )
 
                 res, _ = obj.cypher(query)

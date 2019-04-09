@@ -1,9 +1,15 @@
 import unittest
+from datetime import datetime
 
 from neomodel import *
 
 from neo4j_timeseries import TimeSeriesNode, DeviceConfigNode, TimeSeries
 from neo4j_timeseries.time_series_node import ANode, BNode, VNode
+
+
+def mock_timestamp(t):
+
+    return datetime(1970, 1, 1, 0, 0, t)
 
 
 class TestTimeSeriesNode(unittest.TestCase):
@@ -25,14 +31,14 @@ class TestTimeSeriesNode(unittest.TestCase):
         self.assertEqual(len(self.time_series), 0)
 
     def test_first_insert(self):
-        n = self.time_series.append(1.23)
+        n = self.time_series.append(1.23, mock_timestamp(0))
 
         self.assertEqual(len(self.time_series), 1)
         self.assertIsInstance(n, ANode)
 
     def test_second_insert(self):
-        n = self.time_series.append(1.23)
-        m = self.time_series.append(1.23)
+        n = self.time_series.append(1.23, mock_timestamp(0))
+        m = self.time_series.append(1.23, mock_timestamp(1))
 
         n.refresh()
         m.refresh()
@@ -43,9 +49,9 @@ class TestTimeSeriesNode(unittest.TestCase):
 
     def test_three_inserts(self):
 
-        n = self.time_series.append(1.23)
-        self.time_series.append(1.23)
-        m = self.time_series.append(1.23)
+        n = self.time_series.append(1.23, mock_timestamp(0))
+        self.time_series.append(1.23, mock_timestamp(1))
+        m = self.time_series.append(1.23, mock_timestamp(2))
 
         n.refresh()
         m.refresh()
