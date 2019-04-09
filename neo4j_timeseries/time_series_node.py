@@ -22,6 +22,74 @@ class TimeSeriesRel(StructuredRel):
     """
 
 
+class TimeSeries(object):
+
+    def __init__(self, dev):
+
+        self._dev = dev
+        self._nodes = []
+
+        self.refresh()
+
+    def __len__(self):
+        return self._nodes.__len__()
+
+    def __getitem__(self, item):
+        return self._nodes.__getitem__(item)
+
+    def append(self, value, timestamp=datetime.now(), refresh=True):
+
+        n = TimeSeriesNode.append(self._dev.devid, value, timestamp)
+
+        if refresh:
+            self.refresh()
+        else:
+            self._nodes.append(n)
+
+        return n
+
+    def refresh(self):
+
+        if isinstance(self._dev, DeviceConfigNode):
+            self._dev.refresh()
+        else:
+            query = """
+                match (d: DeviceConfigNode {{devid:'{devid}'}}
+                return d
+            """.format(devid=self._dev)
+            res, _ = db.cypher_query(query)
+
+            assert len(res) == 1
+            res = res[0]
+
+            self._dev = DeviceConfigNode.inflate(res[0])
+
+        query = """
+            match (d)-[:EVENT]->(n:TimeSeriesNode) where id(d)={self}
+            return n
+        """
+
+        res, _ = self._dev.cypher(query)
+
+        self._nodes.clear()
+
+        for line in res:
+
+            n = line[0]
+
+            if ANode.__label__ in n.labels:
+                n = ANode.inflate(n)
+            elif BNode.__label__ in n.labels:
+                n = BNode.inflate(n)
+            elif VNode.__label__ in n.labels:
+                n = VNode.inflate(n)
+            else:
+                raise AssertionError('Bad node: "{}"'.format(str(line[0])))
+
+            self._nodes.append(n)
+
+
+
 class TimeSeriesNode(StructuredNode):
     """Generic Time-Series node
 
@@ -44,7 +112,7 @@ class TimeSeriesNode(StructuredNode):
     Hold the timestamp of the sample contained in the node. Crucial when reading back data.
     """
 
-    devid = IntegerProperty(required=True)
+    devid = StringProperty(required=True)
     """IntegerProperty: Device ID
     
     ID of device which is sourcing the time-series
@@ -65,6 +133,9 @@ class TimeSeriesNode(StructuredNode):
     
     This edge will lead to the next sample. If there is no edge, then the sample is the last sample in the series.
     """
+
+
+
 
     @classmethod
     def append(cls, devid, value, timestamp=datetime.now()):
